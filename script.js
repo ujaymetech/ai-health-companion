@@ -7,6 +7,51 @@ const STORAGE = {
   chat: 'ahc_chat',
 };
 
+// --- Google Analytics Configuration ---
+const GA_MEASUREMENT_ID = 'G-Y0W9J2PW3H';
+
+// Google Analytics UTM Parameter Tracking
+function trackUTMParameters() {
+  if (typeof gtag === 'undefined') return;
+  
+  // Get URL parameters
+  const urlParams = new URLSearchParams(window.location.search);
+  
+  // Extract UTM parameters
+  const utmSource = urlParams.get('utm_source');
+  const utmMedium = urlParams.get('utm_medium');
+  const utmCampaign = urlParams.get('utm_campaign');
+  const utmTerm = urlParams.get('utm_term');
+  const utmContent = urlParams.get('utm_content');
+  
+  // Track UTM parameters in Google Analytics if they exist
+  if (utmSource || utmMedium || utmCampaign) {
+    gtag('event', 'page_view', {
+      'utm_source': utmSource || '',
+      'utm_medium': utmMedium || '',
+      'utm_campaign': utmCampaign || '',
+      'utm_term': utmTerm || '',
+      'utm_content': utmContent || ''
+    });
+    
+    // Store in sessionStorage for later use
+    if (utmSource) sessionStorage.setItem('utm_source', utmSource);
+    if (utmMedium) sessionStorage.setItem('utm_medium', utmMedium);
+    if (utmCampaign) sessionStorage.setItem('utm_campaign', utmCampaign);
+  }
+}
+
+// Track custom events in Google Analytics
+function trackEvent(eventName, eventCategory, eventLabel, eventValue) {
+  if (typeof gtag === 'undefined') return;
+  
+  gtag('event', eventName, {
+    'event_category': eventCategory || 'User Interaction',
+    'event_label': eventLabel || '',
+    'value': eventValue || 0
+  });
+}
+
 // --- Supabase configuration ---
 // TODO: Paste your own Supabase values here (from supabase-credentials.txt)
 const SUPABASE_URL = 'https://fnudwfyposaypzkmoppk.supabase.co';
@@ -703,6 +748,9 @@ async function loginUser(username, password) {
     save('current_user', userData);
     state.currentUser = userData;
     state.role = userData.role;
+    
+    // Track user login in Google Analytics
+    trackEvent('user_logged_in', 'Authentication', userData.role);
     
     // Clear any stale localStorage bookings (logged-in users should only see database appointments)
     save(STORAGE.booking, null);
@@ -2157,6 +2205,10 @@ function selectLanguage(code) {
   if (!lng) return;
   state.language = lng.code;
   save(STORAGE.language, state.language);
+  
+  // Track language selection in Google Analytics
+  trackEvent('language_selected', 'User Preference', code);
+  
   renderLanguage();
   applyI18n();
    // Keep role cards in sync so when user lands there it's already localized
@@ -2196,6 +2248,10 @@ function renderRoles() {
     btn.addEventListener('click', () => {
       state.role = r.key;
       save(STORAGE.role, state.role);
+      
+      // Track role selection in Google Analytics
+      trackEvent('role_selected', 'User Onboarding', r.key);
+      
       renderRoles();
       if (r.key === 'guest') {
         go('chat');
@@ -2477,6 +2533,10 @@ async function renderDoctorSearch() {
           time: timePart,
         };
         save(STORAGE.booking, booking);
+        
+        // Track doctor booking in Google Analytics
+        trackEvent('doctor_booked', 'Booking', d.name);
+        
         toast(i18n.booking_confirmed_toast);
         renderBookingCard();
         renderPatientDashboard();
@@ -2839,6 +2899,10 @@ async function sendChat() {
   const input = el('chatInput');
   const text = (input.value || '').trim();
   if (!text) return;
+  
+  // Track chat message sent in Google Analytics
+  trackEvent('chat_message_sent', 'AI Chat', 'User Message');
+  
   input.value = '';
   const chat = load(STORAGE.chat, []) || [];
   
@@ -3033,6 +3097,9 @@ function bind() {
       signupSubmit.textContent = t('signup_submit');
 
       if (result.success) {
+        // Track user signup in Google Analytics
+        trackEvent('user_signed_up', 'Authentication', role);
+        
         toast(state.language === 'hi' ? 'खाता सफलतापूर्वक बनाया गया!' : 'Account created successfully!');
         // Auto-login after signup
         const loginResult = await loginUser(username, password);
@@ -3120,6 +3187,16 @@ function boot() {
 
   bind();
   registerPWA();
+  
+  // Initialize Google Analytics UTM tracking when page loads
+  if (typeof window !== 'undefined') {
+    // Wait for gtag to be available
+    window.addEventListener('load', () => {
+      if (typeof gtag !== 'undefined') {
+        trackUTMParameters();
+      }
+    });
+  }
 }
 
 boot();
