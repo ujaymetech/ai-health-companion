@@ -213,10 +213,18 @@
           <div class="sectionHead">
             <div class="sectionTitle" data-i18n="completed_title">Completed care</div>
             <div class="sectionSub" data-i18n="completed_sub">
-              Your past consultations
+              Your past visits and follow-ups
             </div>
           </div>
           <div class="cardList" id="completedList"></div>
+
+          <div class="sectionHead">
+            <div class="sectionTitle" data-i18n="cancelled_title">Cancelled appointments</div>
+            <div class="sectionSub" data-i18n="cancelled_sub">
+              Appointments you or the system cancelled
+            </div>
+          </div>
+          <div class="cardList" id="cancelledList"></div>
 
           <div class="sectionHead">
             <div class="sectionTitle" data-i18n="recommended_title">Recommended doctors</div>
@@ -288,6 +296,50 @@
           <div class="cardList" id="doctorList"></div>
 
           <div class="card bookingCard" id="bookingCard" hidden></div>
+        </section>
+
+        <!-- ADVANCED BOOKING SCREEN -->
+        <section class="screen" id="screen-book" data-screen="book" aria-label="Book appointment">
+          <div class="hero compact">
+            <div class="kicker" data-i18n="kicker_booking">Booking</div>
+            <h1 class="title" data-i18n="booking_title">Choose a time</h1>
+          </div>
+
+          <div class="card" id="bookDoctorInfo">
+            <div class="doctorRow">
+              <div class="docAvatar" id="bookDoctorAvatar">D</div>
+              <div style="flex:1">
+                <div class="docName" id="bookDoctorName">Doctor name</div>
+                <div class="docSpec" id="bookDoctorSpec">Specialty</div>
+                <div class="docMeta" id="bookDoctorMeta">Clinic • City</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="row" style="flex-direction:column; align-items:stretch; gap:10px;">
+              <div>
+                <div class="rowTitle" data-i18n="booking_date_label">Select date</div>
+                <div class="rowSub" data-i18n="booking_date_sub">Weekdays only (Mon–Fri)</div>
+                <input class="input" id="bookDate" type="date" />
+              </div>
+              <div>
+                <div class="rowTitle" data-i18n="booking_slots_label">Available time slots</div>
+                <div class="rowSub" data-i18n="booking_slots_sub">Brisbane time (09:00–17:00)</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="slotGrid" id="bookSlots"></div>
+
+          <div class="row apptActions">
+            <button class="btn ghost tall" id="bookBack" type="button" data-i18n="booking_back">
+              Back
+            </button>
+            <button class="btn primary tall" id="bookConfirm" type="button" data-i18n="booking_confirm">
+              Confirm
+            </button>
+          </div>
         </section>
 
         <!-- VIDEO CALL PLACEHOLDER -->
