@@ -504,11 +504,13 @@ async function fetchPatientAppointments(patientUserId) {
       
       return {
         id: apt.id,
+        doctorId: apt.doctor_id,
         doctorName: doctorName,
         specialty: specialty,
         date: isToday ? 'Today' : aptDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         dateRaw: apt.appointment_date, // Store raw date for filtering
         time: new Date(`2000-01-01T${apt.appointment_time}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+        timeRaw: apt.appointment_time,
         status: apt.status === 'scheduled' ? 'Scheduled' : apt.status === 'completed' ? 'Completed' : apt.status,
         statusRaw: apt.status, // Store raw status for filtering
         reason: apt.reason
@@ -874,6 +876,7 @@ const I18N = {
     video_subtitle: 'This is a placeholder screen to represent a teleconsultation.',
     video_end_call: 'End call',
     // Booking
+    booking_title: 'Choose a time',
     booking_confirmed: 'Booking confirmed 🎉',
     book_button: 'Book',
     today: 'Today',
@@ -881,6 +884,12 @@ const I18N = {
     next_slot: 'Next: ',
     available: 'Available',
     no_doctors_available: 'No doctors available at the moment.',
+    booking_date_label: 'Select date',
+    booking_date_sub: 'Weekdays only (Mon–Fri)',
+    booking_slots_label: 'Available time slots',
+    booking_slots_sub: 'Times between 09:00–17:00',
+    booking_back: 'Back',
+    booking_confirm: 'Confirm',
     // Medical conditions
     condition_hypertension: 'Hypertension',
     condition_fever: 'Fever',
@@ -990,6 +999,14 @@ const I18N = {
     next_slot: 'अगला स्लॉट: ',
     available: 'उपलब्ध',
     no_doctors_available: 'इस समय कोई डॉक्टर उपलब्ध नहीं है।',
+    booking_date_label: 'तारीख चुनें',
+    booking_date_sub: 'सिर्फ सोमवार से शुक्रवार',
+    booking_slots_label: 'उपलब्ध समय स्लॉट',
+    booking_slots_sub: 'सुबह 09:00 से शाम 17:00 के बीच के समय',
+    booking_back: 'वापस',
+    booking_confirm: 'कन्फर्म करें',
+    cancelled_title: 'रद्द की गई अपॉइंटमेंट',
+    cancelled_sub: 'जो अपॉइंटमेंट आप या सिस्टम ने रद्द कीं',
     // Medical conditions
     condition_hypertension: 'उच्च रक्तचाप',
     condition_fever: 'बुखार',
@@ -1681,6 +1698,13 @@ const state = {
   role: load(STORAGE.role, null),
   screen: 'language',
   currentUser: null, // Will be loaded from localStorage on boot
+  // Advanced booking flow
+  bookingDoctor: null, // full doctor object for current booking
+  bookingDate: null,   // ISO date string yyyy-mm-dd
+  bookingSlot: null,   // time string like "09:30"
+  // Agentic AI booking
+  suggestedDoctors: null, // doctors suggested by AI
+  consultationReason: null, // reason for consultation from AI
 };
 
 // Language-specific mock names
@@ -1843,6 +1867,8 @@ function translateSpecialty(specialty) {
   // If no match, return original
   return specialty;
 }
+
+// --- end booking helpers (removed advanced flow on user request) ---
 
 // Translate clinic names
 function translateClinic(clinic) {
@@ -2267,11 +2293,15 @@ function renderRoles() {
 async function renderPatientDashboard() {
   const card = el('patientCard');
   const upcoming = el('upcomingList');
+  const completed = el('completedList');
+  const cancelled = el('cancelledList');
   const reco = el('doctorRecoList');
   
   // Show loading state
   if (card) card.innerHTML = '<div class="cardSub">Loading...</div>';
   if (upcoming) upcoming.innerHTML = '<div class="card center"><div class="cardSub">Loading appointments...</div></div>';
+  if (completed) completed.innerHTML = '';
+  if (cancelled) cancelled.innerHTML = '';
   if (reco) reco.innerHTML = '';
   
   // Get current logged-in user
@@ -2351,31 +2381,21 @@ async function renderPatientDashboard() {
     }
   }
   
-  // Render appointments
+  // Render upcoming appointments
   if (upcoming) {
     upcoming.innerHTML = '';
     
-    // For logged-in users, only show appointments from database (not localStorage)
-    // localStorage bookings are only for guest users
-    // Filter to show only scheduled appointments for today or future
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
     const upcomingAppointments = appointments.filter((a) => {
-      // Only show scheduled appointments (not completed or cancelled)
       if (a.statusRaw !== 'scheduled') return false;
-      
-      // Check if appointment date is today or future using raw date
       if (a.dateRaw) {
         const aptDate = new Date(a.dateRaw);
         aptDate.setHours(0, 0, 0, 0);
         return aptDate.getTime() >= today.getTime();
       }
-      
-      // Fallback: if date is "Today", it's valid
       if (a.date === 'Today') return true;
-      
-      // Otherwise include it to be safe
       return true;
     });
     
@@ -2389,27 +2409,57 @@ async function renderPatientDashboard() {
       upcomingAppointments.forEach((a) => {
         const div = document.createElement('div');
         div.className = 'card';
+
+        // Determine if cancel/reschedule is allowed (>= 12 hours before)
+        let canModify = false;
+        if (a.dateRaw && a.timeRaw) {
+          const dt = new Date(a.dateRaw);
+          const [hh, mm] = (a.timeRaw || a.time || '').split(':');
+          if (!isNaN(hh) && !isNaN(mm)) {
+            dt.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+            const now = new Date();
+            const diffMs = dt.getTime() - now.getTime();
+            const hours = diffMs / (1000 * 60 * 60);
+            if (hours >= 12) canModify = true;
+          }
+        }
+
         div.innerHTML = `
           <div class="apptTitle">${translateName(a.doctorName)}</div>
           <div class="apptMeta">${translateSpecialty(a.specialty)} • ${a.date} • ${a.time}</div>
           <div class="apptStatus">${a.status}</div>
+          ${
+            canModify
+              ? `<div class="apptActions">
+                  <button class="btn ghost btnSmall" type="button" data-action="cancel">Cancel</button>
+                  <button class="btn primary btnSmall" type="button" data-action="reschedule">Reschedule</button>
+                </div>`
+              : ''
+          }
         `;
+
+        if (canModify) {
+          const cancelBtn = div.querySelector('button[data-action="cancel"]');
+          const rescheduleBtn = div.querySelector('button[data-action="reschedule"]');
+          if (cancelBtn) {
+            cancelBtn.addEventListener('click', () => cancelAppointment(a.id));
+          }
+          if (rescheduleBtn) {
+            rescheduleBtn.addEventListener('click', () => openReschedule(a));
+          }
+        }
+
         upcoming.appendChild(div);
       });
     }
   }
   
   // Render completed appointments
-  const completed = el('completedList');
+  // Render completed appointments
   if (completed) {
     completed.innerHTML = '';
     
-    // Filter to show only completed appointments
-    const completedAppointments = appointments.filter((a) => {
-      return a.statusRaw === 'completed';
-    });
-    
-    // Sort by date (most recent first)
+    const completedAppointments = appointments.filter((a) => a.statusRaw === 'completed');
     completedAppointments.sort((a, b) => {
       if (a.dateRaw && b.dateRaw) {
         return new Date(b.dateRaw) - new Date(a.dateRaw);
@@ -2433,6 +2483,30 @@ async function renderPatientDashboard() {
           <div class="apptStatus">${a.status}</div>
         `;
         completed.appendChild(div);
+      });
+    }
+  }
+
+  // Render cancelled appointments section (data will come from DB once status is updated there)
+  if (cancelled) {
+    cancelled.innerHTML = '';
+    const cancelledAppointments = appointments.filter((a) => a.statusRaw === 'cancelled');
+    if (cancelledAppointments.length === 0) {
+      cancelled.innerHTML = `
+        <div class="card center">
+          <div class="cardSub">No cancelled appointments</div>
+        </div>
+      `;
+    } else {
+      cancelledAppointments.forEach((a) => {
+        const div = document.createElement('div');
+        div.className = 'card';
+        div.innerHTML = `
+          <div class="apptTitle">${translateName(a.doctorName)}</div>
+          <div class="apptMeta">${translateSpecialty(a.specialty)} • ${a.date} • ${a.time}</div>
+          <div class="apptStatus">${a.status}</div>
+        `;
+        cancelled.appendChild(div);
       });
     }
   }
@@ -2513,8 +2587,15 @@ async function renderDoctorSearch() {
   const i18n = I18N[state.language] || I18N.en;
   list.innerHTML = '<div class="card center"><div class="cardSub">Loading doctors...</div></div>';
   
-  // Fetch real doctors from database
-  const doctors = await fetchDoctorsFromDB();
+  // Check if we have filtered doctors from AI suggestion
+  let doctors = [];
+  if (state.suggestedDoctors && state.suggestedDoctors.length > 0) {
+    doctors = state.suggestedDoctors;
+    state.suggestedDoctors = null; // Clear after use
+  } else {
+    // Normal flow: fetch all doctors
+    doctors = await fetchDoctorsFromDB();
+  }
   
   list.innerHTML = '';
   
@@ -2522,26 +2603,30 @@ async function renderDoctorSearch() {
     list.innerHTML = `<div class="card center"><div class="cardSub">${i18n.no_doctors_available}</div></div>`;
     return;
   }
+
+  const currentUser = getCurrentUser();
+
   doctors.forEach((d) => {
     list.appendChild(
       doctorCardNode(d, i18n.book_button, () => {
-        const timePart = d.nextSlot.split('•')[1]?.trim() || '6:30 PM';
-        const booking = {
-          doctorName: d.name,
-          specialty: d.specialty, // Store original, will translate when displaying
-          date: i18n.today,
-          time: timePart,
-        };
-        save(STORAGE.booking, booking);
-        
-        // Track doctor booking in Google Analytics
-        trackEvent('doctor_booked', 'Booking', d.name);
-        
-        toast(i18n.booking_confirmed_toast);
-        renderBookingCard();
-        renderPatientDashboard();
-        // After booking, jump to video call placeholder like in the Figma flow
-        go('video');
+        // If not logged in as patient, keep simple localStorage + video flow
+        if (!currentUser || currentUser.role !== 'patient') {
+          const timePart = d.nextSlot.split('•')[1]?.trim() || '6:30 PM';
+          const booking = {
+            doctorName: d.name,
+            specialty: d.specialty, // Store original, will translate when displaying
+            date: i18n.today,
+            time: timePart,
+          };
+          save(STORAGE.booking, booking);
+          toast(i18n.booking_confirmed_toast);
+          renderBookingCard();
+          go('video');
+          return;
+        }
+
+        // Logged-in patient: open advanced booking screen
+        openBookingScreen(d);
       }),
     );
   });
@@ -2562,6 +2647,242 @@ function renderBookingCard() {
     <div class="cardSub">${translateName(booking.doctorName)} • ${translateSpecialty(booking.specialty)}</div>
     <div class="cardSub">${booking.date} • ${booking.time}</div>
   `;
+}
+
+// ---------- AGENTIC AI BOOKING HANDLER ----------
+
+async function handleConsultDoctorAction(doctors, reason) {
+  const currentUser = getCurrentUser();
+  const i18n = I18N[state.language] || I18N.en;
+  
+  // Store consultation reason for booking
+  state.consultationReason = reason || 'Consultation';
+  
+  // If no doctors from n8n, fetch from database as fallback
+  // fetchDoctorsFromDB already has fallback to mock data, so we'll always get doctors
+  if (!doctors || doctors.length === 0) {
+    console.log('No doctors from n8n, fetching from database...');
+    doctors = await fetchDoctorsFromDB();
+    console.log('Fetched doctors from DB:', doctors.length);
+  }
+  
+  // Navigate to doctor search with doctors (from n8n, DB, or mock fallback)
+  state.suggestedDoctors = doctors;
+  go('doctors');
+}
+
+// ---------- ADVANCED BOOKING HELPERS ----------
+
+// Generate 30-minute slots from 09:00 to 17:00 (local time)
+function generateBrisbaneSlotsForDate(dateStr) {
+  const slots = [];
+  for (let h = 9; h < 17; h++) {
+    for (let m = 0; m < 60; m += 30) {
+      const hh = String(h).padStart(2, '0');
+      const mm = String(m).padStart(2, '0');
+      slots.push(`${hh}:${mm}`);
+    }
+  }
+  return slots;
+}
+
+async function fetchDoctorDayAppointments(doctorId, dateStr) {
+  // Use the same Supabase client used elsewhere; fail gracefully if missing
+  if (!supabaseClient || !doctorId || !dateStr) {
+    console.log('fetchDoctorDayAppointments: Missing params', { supabaseClient: !!supabaseClient, doctorId, dateStr });
+    return [];
+  }
+  
+  try {
+    const { data, error } = await supabaseClient
+      .from('appointments')
+      .select('id, appointment_date, appointment_time, status')
+      .eq('doctor_id', doctorId)
+      .eq('appointment_date', dateStr);
+    
+    if (error) {
+      console.error('Error fetching doctor day appointments:', error);
+      return [];
+    }
+    
+    if (!data) {
+      console.log('No appointments found for doctor', doctorId, 'on', dateStr);
+      return [];
+    }
+    
+    console.log('Found', data.length, 'appointments for doctor', doctorId, 'on', dateStr);
+    return data;
+  } catch (err) {
+    console.error('Exception in fetchDoctorDayAppointments:', err);
+    return [];
+  }
+}
+
+function openBookingScreen(doctor, existingAppointment) {
+  state.bookingDoctor = doctor;
+  state.bookingSlot = null;
+
+  // Default date: from next day / at least ~12 hours ahead
+  const now = new Date();
+  const minDate = new Date(now.getTime() + 12 * 60 * 60 * 1000);
+  minDate.setHours(0, 0, 0, 0);
+  const minIso = minDate.toISOString().slice(0, 10);
+
+  // Use existing appointment date if provided and not in the past; otherwise use minIso
+  let startDate = existingAppointment?.date || minIso;
+  if (existingAppointment?.date && existingAppointment.date < minIso) {
+    startDate = minIso;
+  }
+
+  state.bookingDate = startDate;
+
+  const i18n = I18N[state.language] || I18N.en;
+
+  // Fill doctor info
+  const name = doctor.name || doctor.full_name || i18n.unknown_doctor;
+  const clinicName = translateClinic(doctor.clinic || doctor.clinic_name || 'Clinic');
+  const cityName = translateCity(doctor.city || '');
+
+  const avatarEl = el('bookDoctorAvatar');
+  const nameEl = el('bookDoctorName');
+  const specEl = el('bookDoctorSpec');
+  const metaEl = el('bookDoctorMeta');
+  const dateInput = el('bookDate');
+
+  if (avatarEl) avatarEl.textContent = (name.split(' ')[1] || name)[0];
+  if (nameEl) nameEl.textContent = translateName(name);
+  if (specEl) specEl.textContent = translateSpecialty(doctor.specialty || 'General Physician');
+  if (metaEl) metaEl.textContent = clinicName + (cityName ? ' • ' + cityName : '');
+  if (dateInput) {
+    dateInput.value = state.bookingDate;
+    dateInput.min = minIso; // cannot pick dates earlier than ~next day
+  }
+
+  renderBookingSlots();
+  go('book');
+}
+
+async function renderBookingSlots() {
+  const container = el('bookSlots');
+  if (!container || !state.bookingDoctor || !state.bookingDate) return;
+  container.innerHTML = '';
+
+  const allSlots = generateBrisbaneSlotsForDate(state.bookingDate);
+
+  // Load booked slots for this doctor and date
+  let bookedSet = new Set();
+  try {
+    const bookedAppointments = await fetchDoctorDayAppointments(state.bookingDoctor.id, state.bookingDate);
+    console.log('Booked appointments for doctor', state.bookingDoctor.id, 'on', state.bookingDate, ':', bookedAppointments);
+    
+    // Normalize time format: strip seconds if present (e.g., "09:00:00" -> "09:00")
+    bookedSet = new Set(
+      bookedAppointments
+        .filter((a) => a.status !== 'cancelled')
+        .map((a) => {
+          const time = a.appointment_time || '';
+          // If time has seconds (HH:MM:SS), strip them to match slot format (HH:MM)
+          return time.includes(':') ? time.substring(0, 5) : time;
+        })
+        .filter((t) => t.length > 0), // Remove empty strings
+    );
+    
+    console.log('Normalized booked times:', Array.from(bookedSet));
+  } catch (err) {
+    console.error('Error loading booked slots', err);
+    bookedSet = new Set();
+  }
+
+  allSlots.forEach((time) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'slotBtn';
+    btn.textContent = time;
+
+    if (bookedSet.has(time)) {
+      btn.classList.add('disabled');
+      btn.disabled = true;
+      btn.title = 'This slot is already booked';
+    } else {
+      btn.addEventListener('click', () => {
+        state.bookingSlot = time;
+        // Clear previous selection
+        Array.from(container.querySelectorAll('.slotBtn')).forEach((b) => b.classList.remove('selected'));
+        btn.classList.add('selected');
+      });
+    }
+
+    container.appendChild(btn);
+  });
+}
+
+async function confirmBooking() {
+  const i18n = I18N[state.language] || I18N.en;
+  const currentUser = getCurrentUser();
+  if (!currentUser || currentUser.role !== 'patient') {
+    toast('Please login as patient to book');
+    return;
+  }
+  if (!state.bookingDoctor || !state.bookingDate || !state.bookingSlot) {
+    toast('Please choose a date and time');
+    return;
+  }
+  if (!supabaseClient) {
+    toast('Database not connected');
+    return;
+  }
+
+  // Insert appointment in Supabase
+  const payload = {
+    patient_id: currentUser.id,
+    doctor_id: state.bookingDoctor.id,
+    appointment_date: state.bookingDate,
+    appointment_time: state.bookingSlot,
+    status: 'scheduled',
+    reason: state.consultationReason || 'Consultation', // Use AI-suggested reason if available
+  };
+
+  const { error } = await supabaseClient.from('appointments').insert(payload);
+  if (error) {
+    console.error('Booking error', error);
+    toast('Could not book appointment');
+    return;
+  }
+
+  // Track booking in GA
+  trackEvent('appointment_booked', 'Booking', state.bookingDoctor.id);
+
+  toast(i18n.booking_confirmed_toast);
+  // Refresh patient dashboard and go back
+  await renderPatientDashboard();
+  go('patient');
+}
+
+async function cancelAppointment(appointmentId) {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from('appointments')
+    .update({ status: 'cancelled' })
+    .eq('id', appointmentId);
+  if (error) {
+    console.error('Cancel error', error);
+    toast('Could not cancel');
+    return;
+  }
+  trackEvent('appointment_cancelled', 'Booking', appointmentId);
+  await renderPatientDashboard();
+}
+
+function openReschedule(appointment) {
+  if (!appointment) return;
+  const doctor = {
+    id: appointment.doctorId,
+    name: appointment.doctorName,
+    specialty: appointment.specialty,
+    clinic: appointment.clinic,
+    city: appointment.city,
+  };
+  openBookingScreen(doctor, appointment);
 }
 
 async function renderDoctorDashboard() {
@@ -2838,12 +3159,19 @@ async function callN8nLLM(userText) {
       
       // Return error message in user's language
       if (state.language === 'hi') {
-        return 'क्षमा करें, मैं अभी जवाब नहीं दे सकता/सकती। कृपया कुछ समय बाद पुनः प्रयास करें।';
+        return { type: 'text', text: 'क्षमा करें, मैं अभी जवाब नहीं दे सकता/सकती। कृपया कुछ समय बाद पुनः प्रयास करें।' };
       }
-      return 'Sorry, I could not respond right now. Please try again in a moment.';
+      return { type: 'text', text: 'Sorry, I could not respond right now. Please try again in a moment.' };
     }
 
     const data = await res.json();
+    
+    // Debug: Log the full response to see structure
+    console.log('n8n response:', data);
+    console.log('n8n response keys:', Object.keys(data));
+    if (data.reply) console.log('reply content:', data.reply);
+    if (data.doctors) console.log('doctors in data:', data.doctors);
+    if (data.json) console.log('json property:', data.json);
     
     // Handle different response formats from n8n
     let reply = data.reply || data.response || data.message || data.text;
@@ -2860,20 +3188,111 @@ async function callN8nLLM(userText) {
     if (!reply) {
       console.error('Unexpected n8n response format:', data);
       if (state.language === 'hi') {
-        return 'क्षमा करें, मुझे एक वैध जवाब नहीं मिला।';
+        return { type: 'text', text: 'क्षमा करें, मुझे एक वैध जवाब नहीं मिला।' };
       }
-      return 'Sorry, I did not get a valid reply.';
+      return { type: 'text', text: 'Sorry, I did not get a valid reply.' };
     }
     
-    return reply;
+    // Try to parse JSON if reply is a JSON string
+    let parsedReply = null;
+    try {
+      // Check if reply is a JSON string
+      if (typeof reply === 'string' && (reply.trim().startsWith('{') || reply.trim().startsWith('['))) {
+        parsedReply = JSON.parse(reply);
+      }
+    } catch (e) {
+      // Not JSON, continue with normal text
+    }
+    
+    // Check if response has structured action (from parsed JSON or direct object)
+    const actionData = parsedReply || data;
+    
+    // Debug: Check for doctors in various locations
+    let doctorsArray = [];
+    
+    // Try multiple paths to find doctors array
+    if (Array.isArray(actionData.doctors)) {
+      doctorsArray = actionData.doctors;
+    } else if (Array.isArray(data.doctors)) {
+      doctorsArray = data.doctors;
+    } else if (actionData.doctors && Array.isArray(actionData.doctors)) {
+      doctorsArray = actionData.doctors;
+    } else if (data.doctors && Array.isArray(data.doctors)) {
+      doctorsArray = data.doctors;
+    } else if (data.json && Array.isArray(data.json.doctors)) {
+      // Check if doctors are nested in json property
+      doctorsArray = data.json.doctors;
+    } else if (actionData.json && Array.isArray(actionData.json.doctors)) {
+      doctorsArray = actionData.json.doctors;
+    }
+    
+    // Debug: Log the full structure to help identify where doctors are
+    console.log('Doctors found:', doctorsArray.length, doctorsArray);
+    console.log('Full data structure:', JSON.stringify(data, null, 2));
+    console.log('ActionData structure:', JSON.stringify(actionData, null, 2));
+    
+    if (actionData.action === 'consult_doctor') {
+      return {
+        type: 'action',
+        action: 'consult_doctor',
+        message: actionData.message || reply || 'Finding available doctors...',
+        doctors: doctorsArray,
+        reason: actionData.reason || data.reason || 'Consultation',
+        language: actionData.language || data.language || state.language || 'en'
+      };
+    }
+    
+    // If reply was JSON but not an action, extract message if available
+    if (parsedReply && parsedReply.message) {
+      return { type: 'text', text: parsedReply.message };
+    }
+    
+    // If reply contains JSON string with action, try to extract message
+    if (typeof reply === 'string' && reply.includes('"action"') && reply.includes('"message"')) {
+      try {
+        const jsonMatch = reply.match(/\{.*"action"[^}]*"message"\s*:\s*"([^"]+)"[^}]*\}/);
+        if (jsonMatch && jsonMatch[1]) {
+          // Found message in JSON string, but check if it's a consult_doctor action
+          const fullJson = JSON.parse(reply);
+          if (fullJson.action === 'consult_doctor') {
+            return {
+              type: 'action',
+              action: 'consult_doctor',
+              message: fullJson.message || jsonMatch[1],
+              doctors: Array.isArray(fullJson.doctors) ? fullJson.doctors : (Array.isArray(data.doctors) ? data.doctors : []),
+              reason: fullJson.reason || data.reason || 'Consultation',
+              language: fullJson.language || data.language || state.language || 'en'
+            };
+          }
+          return { type: 'text', text: jsonMatch[1] };
+        }
+      } catch (e) {
+        // JSON parsing failed, continue with normal text extraction
+      }
+    }
+    
+    // Return normal text response (clean up any JSON artifacts)
+    // Extract message from JSON string if present
+    let cleanReply = reply;
+    if (typeof reply === 'string') {
+      // Try to extract message field from JSON string
+      const messageMatch = reply.match(/"message"\s*:\s*"([^"]+)"/);
+      if (messageMatch && messageMatch[1]) {
+        cleanReply = messageMatch[1];
+      } else {
+        // Remove JSON structure if it's a simple JSON string
+        cleanReply = reply.replace(/^\{[^}]*"message"\s*:\s*"([^"]+)"[^}]*\}$/, '$1').trim();
+      }
+    }
+    return { type: 'text', text: cleanReply };
   } catch (err) {
     console.error('n8n call failed:', err);
     
     // Return error message in user's language
     if (state.language === 'hi') {
-      return 'नेटवर्क समस्या। कृपया अपना इंटरनेट कनेक्शन जांचें और पुनः प्रयास करें।';
+      return { type: 'text', text: 'नेटवर्क समस्या। कृपया अपना इंटरनेट कनेक्शन जांचें और पुनः प्रयास करें।' };
     }
-    return 'Network problem talking to AI assistant. Please check your internet and try again.';
+    return { type: 'text', text: 'Network problem talking to AI assistant. Please check your internet and try again.' };
   }
 }
 
@@ -2927,16 +3346,37 @@ async function sendChat() {
     if (reply === null) {
       // Small delay for better UX
       await new Promise(resolve => setTimeout(resolve, 700));
-      reply = mockAIReply(text);
+      reply = { type: 'text', text: mockAIReply(text) };
     }
   } catch (err) {
     console.error('Error getting AI reply:', err);
     // Fallback to mock response on error
-    reply = mockAIReply(text);
+    reply = { type: 'text', text: mockAIReply(text) };
   }
 
-  // Replace thinking message with actual reply
-  chat[chat.length - 1] = { from: 'ai', text: reply, ts: Date.now() };
+  // Handle structured response (agentic booking)
+  if (reply && typeof reply === 'object' && reply.type === 'action' && reply.action === 'consult_doctor') {
+    // Store doctors and reason in state
+    state.suggestedDoctors = reply.doctors || [];
+    state.consultationReason = reply.reason || 'Consultation';
+    
+    // Show AI message
+    chat[chat.length - 1] = { 
+      from: 'ai', 
+      text: reply.message, 
+      ts: Date.now() 
+    };
+    save(STORAGE.chat, chat);
+    renderChat();
+    
+    // Handle the consultation action
+    handleConsultDoctorAction(reply.doctors, reply.reason);
+    return;
+  }
+
+  // Normal text response handling
+  const replyText = reply?.text || reply || 'Sorry, I could not respond.';
+  chat[chat.length - 1] = { from: 'ai', text: replyText, ts: Date.now() };
   save(STORAGE.chat, chat);
   renderChat();
   scrollChatToBottom();
@@ -3132,6 +3572,28 @@ function bind() {
       if (state.role === 'doctor') go('doctor');
       else if (state.role === 'patient') go('patient');
       else go('language');
+    });
+  }
+
+  // Advanced booking screen buttons
+  const bookBack = el('bookBack');
+  const bookConfirm = el('bookConfirm');
+  const bookDate = el('bookDate');
+  if (bookBack) {
+    bookBack.addEventListener('click', () => {
+      // Go back to doctor list for patients
+      go('doctors');
+    });
+  }
+  if (bookConfirm) {
+    bookConfirm.addEventListener('click', () => {
+      confirmBooking();
+    });
+  }
+  if (bookDate) {
+    bookDate.addEventListener('change', (e) => {
+      state.bookingDate = e.target.value;
+      renderBookingSlots();
     });
   }
 
