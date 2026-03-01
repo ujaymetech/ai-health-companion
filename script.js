@@ -3284,7 +3284,6 @@ async function renderDoctorDashboard() {
           translatedConditions = translateCondition('Consultation');
         }
         const showJoin = canJoinConsultation(p);
-        const showJoinDisabled = !showJoin && p.dateRaw && p.timeRaw && isAppointmentInFuture(p.dateRaw, p.timeRaw);
         const timeDisplay = p.timeRaw ? new Date('2000-01-01T' + String(p.timeRaw).trim()).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
         div.innerHTML = `
           <div class="avatar">${p.name.charAt(0)}</div>
@@ -3294,8 +3293,7 @@ async function renderDoctorDashboard() {
             <div class="patientCond">${translatedConditions}</div>
             ${timeDisplay ? `<div class="patientCond" style="font-size:12px;color:#6b7280;">${timeDisplay}</div>` : ''}
             ${showJoin ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" data-action="join" data-appointment-id="${p.id || ''}">${i18n.join_call}</button></div>` : ''}
-            ${showJoinDisabled ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" disabled title="${i18n.join_available_soon}">${i18n.join_call}</button></div>` : ''}
-            ${!showJoin && !showJoinDisabled && p.dateRaw && p.timeRaw ? `<div class="apptSub" style="font-size:11px;color:#9ca3af;">${i18n.join_available_soon}</div>` : ''}
+            ${!showJoin && p.dateRaw && p.timeRaw && isAppointmentInFuture(p.dateRaw, p.timeRaw) ? `<div class="apptSub" style="font-size:11px;color:#9ca3af;">${i18n.join_available_soon}</div>` : ''}
           </div>
         `;
         list.appendChild(div);
@@ -3315,7 +3313,6 @@ async function renderDoctorDashboard() {
         const div = document.createElement('div');
         div.className = 'card patientCard';
         const showJoin = canJoinConsultation(apt);
-        const showJoinDisabled = !showJoin && apt.dateRaw && apt.timeRaw && isAppointmentInFuture(apt.dateRaw, apt.timeRaw);
         div.innerHTML = `
           <div class="avatar">${apt.patientName.charAt(0)}</div>
           <div style="flex:1">
@@ -3324,8 +3321,7 @@ async function renderDoctorDashboard() {
             <div class="patientCond">${apt.date} • ${apt.time}</div>
             <div class="patientCond" style="margin-top: 4px; font-size: 12px; color: #666;">${translateCondition(apt.reason)}</div>
             ${showJoin ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" data-action="join" data-appointment-id="${apt.id || ''}">${i18n.join_call}</button></div>` : ''}
-            ${showJoinDisabled ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" disabled title="${i18n.join_available_soon}">${i18n.join_call}</button></div>` : ''}
-            ${!showJoin && !showJoinDisabled && apt.dateRaw && apt.timeRaw ? `<div class="apptSub" style="font-size:11px;color:#9ca3af;">${i18n.join_available_soon}</div>` : ''}
+            ${!showJoin && apt.dateRaw && apt.timeRaw && isAppointmentInFuture(apt.dateRaw, apt.timeRaw) ? `<div class="apptSub" style="font-size:11px;color:#9ca3af;">${i18n.join_available_soon}</div>` : ''}
           </div>
           <div class="apptStatus" style="margin-top: 8px;">${apt.status}</div>
         `;
