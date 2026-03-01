@@ -1069,6 +1069,8 @@ const I18N = {
     booking_future_only: 'Please choose a slot at least 30 minutes from now',
     slot_passed: 'Available from 30 minutes from now',
     slot_booked: 'This slot is already booked',
+    weekdays_only_slot: 'Weekdays only (Mon–Fri)',
+    weekdays_only_message: 'Choose a weekday to see available slots.',
     // Medical conditions
     condition_hypertension: 'Hypertension',
     condition_fever: 'Fever',
@@ -3029,23 +3031,42 @@ async function renderBookingSlots() {
   const isToday = state.bookingDate === getLocalDateString();
   const minSlotTime = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes from now onwards
 
+  // Weekdays only: 0 = Sunday, 6 = Saturday
+  const selectedDate = new Date(state.bookingDate + 'T12:00:00');
+  const dayOfWeek = selectedDate.getDay();
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+  if (isWeekend) {
+    const msg = document.createElement('p');
+    msg.className = 'slotGridMessage';
+    msg.textContent = (I18N[state.language] || I18N.en).weekdays_only_message || 'Choose a weekday to see available slots.';
+    msg.style.cssText = 'grid-column:1/-1; font-size:13px; color:#6b7280; margin:0 0 8px 0;';
+    container.appendChild(msg);
+  }
+
   allSlots.forEach((time) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'slotBtn';
     btn.textContent = time;
 
-    const isPastSlot = isToday && (() => {
+    const isPastSlot = !isWeekend && isToday && (() => {
       const [hh, mm] = time.split(':').map((n) => parseInt(n, 10));
       const slotAt = new Date(now);
       slotAt.setHours(hh, mm, 0, 0);
       return slotAt < minSlotTime; // disable if slot is before 30 min from now
     })();
 
-    if (bookedSet.has(time) || isPastSlot) {
+    const isBooked = bookedSet.has(time);
+    const disabled = isWeekend || isBooked || isPastSlot;
+    let titleMsg = (I18N[state.language] || I18N.en).slot_booked;
+    if (isWeekend) titleMsg = (I18N[state.language] || I18N.en).weekdays_only_slot || 'Weekdays only (Mon–Fri)';
+    else if (isPastSlot) titleMsg = (I18N[state.language] || I18N.en).slot_passed;
+
+    if (disabled) {
       btn.classList.add('disabled');
       btn.disabled = true;
-      btn.title = isPastSlot ? (I18N[state.language] || I18N.en).slot_passed : (I18N[state.language] || I18N.en).slot_booked;
+      btn.title = titleMsg;
     } else {
       btn.addEventListener('click', () => {
         state.bookingSlot = time;
