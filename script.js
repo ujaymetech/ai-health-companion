@@ -240,16 +240,24 @@ async function fetchTodaysPatients(doctorUserId) {
       return [];
     }
     
-    // Combine appointment and patient data
-    return appointments.map((apt) => {
-      const patient = patients?.find(p => p.user_id === apt.patient_id);
-      return {
-        name: patient?.full_name || (I18N[state.language] || I18N.en).patient_fallback,
-        age: patient?.age || '',
-        city: patient?.city || '',
-        conditions: apt.reason || (patient?.medical_conditions && patient.medical_conditions.join(', ')) || 'Consultation' // Will be translated when displayed
-      };
-    });
+    // Combine appointment and patient data; exclude past slots (only future appointments today)
+    const now = new Date();
+    const todayStr = today;
+    return appointments
+      .map((apt) => {
+        const patient = patients?.find(p => p.user_id === apt.patient_id);
+        return {
+          id: apt.id,
+          dateRaw: todayStr,
+          timeRaw: apt.appointment_time,
+          patient_id: apt.patient_id,
+          name: patient?.full_name || (I18N[state.language] || I18N.en).patient_fallback,
+          age: patient?.age || '',
+          city: patient?.city || '',
+          conditions: apt.reason || (patient?.medical_conditions && patient.medical_conditions.join(', ')) || 'Consultation'
+        };
+      })
+      .filter((p) => isAppointmentInFuture(todayStr, p.timeRaw));
   } catch (e) {
     console.error('Exception fetching today\'s patients:', e);
     return [];
@@ -309,8 +317,8 @@ async function fetchDoctorUpcomingAppointments(doctorUserId) {
       });
     }
     
-    // Transform appointments
-    return appointments.map((apt) => {
+    // Transform and keep only future appointments (exclude past date+time)
+    const transformed = appointments.map((apt) => {
       const patient = patientMap[apt.patient_id];
       const aptDate = new Date(apt.appointment_date);
       const todayCheck = new Date();
@@ -320,16 +328,19 @@ async function fetchDoctorUpcomingAppointments(doctorUserId) {
       
       return {
         id: apt.id,
+        patient_id: apt.patient_id,
         patientName: translateName(patient?.full_name || i18n.patient_fallback),
         patientAge: patient?.age || '',
         patientCity: patient?.city || '',
         date: isToday ? i18n.today : aptDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
         dateRaw: apt.appointment_date,
         time: new Date(`2000-01-01T${apt.appointment_time}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }),
+        timeRaw: apt.appointment_time,
         reason: apt.reason || 'Consultation',
         status: 'Scheduled'
       };
     });
+    return transformed.filter((apt) => isAppointmentInFuture(apt.dateRaw, apt.timeRaw));
   } catch (e) {
     console.error('Exception fetching upcoming appointments:', e);
     return [];
@@ -524,6 +535,166 @@ async function fetchPatientAppointments(patientUserId) {
     toast('Error loading appointments. Check console for details.');
     return [];
   }
+}
+
+// --- Consultation (Jitsi) helpers ---
+const JOIN_WINDOW_START_MINS = 10;  // Join button appears 10 minutes before
+const JOIN_WINDOW_END_MINS = 60;    // Join allowed until 60 minutes after start
+
+/**
+ * Returns true only when current time is within join window: from 10 min before to 60 min after appointment time.
+ * @param appointment - { dateRaw, timeRaw } (e.g. dateRaw: '2026-01-26', timeRaw: '14:00')
+ */
+function canJoinConsultation(appointment) {
+  if (!appointment || !appointment.dateRaw || !appointment.timeRaw) return false;
+  const dateStr = appointment.dateRaw;
+  let timeStr = String(appointment.timeRaw).trim();
+  if (!/^\d{1,2}:\d{2}/.test(timeStr)) return false;
+  const [hh, mm] = timeStr.split(':').map((n) => parseInt(n, 10));
+  if (isNaN(hh) || isNaN(mm)) return false;
+  const consultAt = new Date(dateStr + 'T' + String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + ':00');
+  const now = new Date();
+  const start = new Date(consultAt.getTime() - JOIN_WINDOW_START_MINS * 60 * 1000);
+  const end = new Date(consultAt.getTime() + JOIN_WINDOW_END_MINS * 60 * 1000);
+  return now >= start && now <= end;
+}
+
+/**
+ * Create or get consultation for an appointment. Returns { id, room_name, appointment_id } or null.
+ * Enforces that only the assigned patient or doctor can create/fetch.
+ */
+async function createOrGetConsultation(appointmentId) {
+  if (!supabaseClient || !appointmentId) return null;
+  const user = getCurrentUser();
+  if (!user) return null;
+
+  const { data: appointment, error: aptErr } = await supabaseClient
+    .from('appointments')
+    .select('id, patient_id, doctor_id')
+    .eq('id', appointmentId)
+    .eq('status', 'scheduled')
+    .single();
+
+  if (aptErr || !appointment) return null;
+  const isPatient = user.role === 'patient' && user.id === appointment.patient_id;
+  const isDoctor = user.role === 'doctor' && user.id === appointment.doctor_id;
+  if (!isPatient && !isDoctor) return null;
+
+  const { data: existing } = await supabaseClient
+    .from('consultations')
+    .select('id, room_name, appointment_id')
+    .eq('appointment_id', appointmentId)
+    .in('status', ['scheduled', 'active'])
+    .maybeSingle();
+
+  if (existing) return existing;
+
+  const roomName = 'ahc-' + crypto.randomUUID().replace(/-/g, '') + '-' + Date.now().toString(36);
+  const { data: created, error: insertErr } = await supabaseClient
+    .from('consultations')
+    .insert({
+      appointment_id: appointmentId,
+      room_name: roomName,
+      patient_id: appointment.patient_id,
+      doctor_id: appointment.doctor_id,
+      status: 'active',
+      started_at: new Date().toISOString(),
+    })
+    .select('id, room_name, appointment_id')
+    .single();
+
+  if (insertErr) {
+    console.error('createOrGetConsultation insert error', insertErr);
+    return null;
+  }
+  return created;
+}
+
+/**
+ * Mark consultation as completed and set ended_at.
+ */
+async function endConsultation(consultationId) {
+  if (!supabaseClient || !consultationId) return;
+  await supabaseClient
+    .from('consultations')
+    .update({ status: 'completed', ended_at: new Date().toISOString() })
+    .eq('id', consultationId);
+}
+
+// --- Jitsi Meet (video call) ---
+let jitsiApi = null;
+const JITSI_DOMAIN = 'meet.jit.si';
+
+function getJitsiDisplayName() {
+  const user = getCurrentUser();
+  if (user && (user.full_name || user.username)) return user.full_name || user.username;
+  return state.role === 'doctor' ? 'Doctor' : 'Patient';
+}
+
+function destroyJitsi() {
+  if (jitsiApi) {
+    try { jitsiApi.dispose(); } catch (e) { /* ignore */ }
+    jitsiApi = null;
+  }
+  const container = document.getElementById('jitsi-container');
+  if (container) container.innerHTML = '';
+}
+
+function initJitsi() {
+  const consultation = state.activeConsultation;
+  if (!consultation || !consultation.room_name) return;
+  const container = document.getElementById('jitsi-container');
+  if (!container) return;
+  container.innerHTML = '';
+  destroyJitsi();
+
+  function startMeet() {
+    if (!window.JitsiMeetExternalAPI) {
+      console.error('Jitsi API not loaded');
+      toast('Could not load video call.');
+      return;
+    }
+    jitsiApi = new window.JitsiMeetExternalAPI(JITSI_DOMAIN, {
+      roomName: consultation.room_name,
+      width: '100%',
+      height: '100%',
+      parentNode: container,
+      configOverwrite: {
+        startWithAudioMuted: true,
+        startWithVideoMuted: false,
+        disableThirdPartyRequests: true,
+        enableWelcomePage: false,
+        fileRecordingsEnabled: false,
+        liveStreamingEnabled: false,
+        disableRecordAudioNotification: true,
+      },
+      interfaceConfigOverwrite: {
+        TOOLBAR_BUTTONS: [],
+        SHOW_JITSI_WATERMARK: false,
+      },
+      userInfo: { displayName: getJitsiDisplayName() },
+    });
+    jitsiApi.addEventListener('videoConferenceLeft', () => {
+      destroyJitsi();
+      if (state.activeConsultation) {
+        endConsultation(state.activeConsultation.id);
+        state.activeConsultation = null;
+      }
+      if (state.role === 'doctor') go('doctor'); else if (state.role === 'patient') go('patient');
+      else go('language');
+    });
+  }
+
+  if (window.JitsiMeetExternalAPI) {
+    startMeet();
+    return;
+  }
+  const script = document.createElement('script');
+  script.src = 'https://' + JITSI_DOMAIN + '/external_api.js';
+  script.async = true;
+  script.onload = startMeet;
+  script.onerror = () => toast('Could not load video call.');
+  document.head.appendChild(script);
 }
 
 // Fetch doctors from Supabase database
@@ -873,8 +1044,11 @@ const I18N = {
     signup_back: 'Back to login',
     kicker_call: 'Live consult',
     video_title: 'Video call in progress',
-    video_subtitle: 'This is a placeholder screen to represent a teleconsultation.',
+    video_subtitle: 'Secure video consultation. Join when both parties are ready.',
     video_end_call: 'End call',
+    video_disclaimer: 'Not for emergencies. For diagnosis and treatment, see a healthcare provider in person. This session is not recorded.',
+    join_call: 'Join call',
+    join_available_soon: 'Join available 10 min before',
     // Booking
     booking_title: 'Choose a time',
     booking_confirmed: 'Booking confirmed 🎉',
@@ -890,6 +1064,9 @@ const I18N = {
     booking_slots_sub: 'Times between 09:00–17:00',
     booking_back: 'Back',
     booking_confirm: 'Confirm',
+    booking_future_only: 'Please choose a slot at least 30 minutes from now',
+    slot_passed: 'Available from 30 minutes from now',
+    slot_booked: 'This slot is already booked',
     // Medical conditions
     condition_hypertension: 'Hypertension',
     condition_fever: 'Fever',
@@ -989,8 +1166,11 @@ const I18N = {
     signup_back: 'लॉगिन पर वापस जाएँ',
     kicker_call: 'लाइव कंसल्ट',
     video_title: 'वीडियो कॉल जारी है',
-    video_subtitle: 'यह टेलीकंसल्टेशन दिखाने के लिए placeholders स्क्रीन है।',
+    video_subtitle: 'सुरक्षित वीडियो परामर्श। दोनों पक्ष तैयार हों तो जॉइन करें।',
     video_end_call: 'कॉल समाप्त करें',
+    video_disclaimer: 'इमरजेंसी के लिए नहीं। निदान के लिए डॉक्टर से मिलें। यह सत्र रिकॉर्ड नहीं होता।',
+    join_call: 'कॉल में जॉइन करें',
+    join_available_soon: 'अपॉइंटमेंट से 10 मिनट पहले जॉइन कर सकते हैं',
     // Booking
     booking_confirmed: 'बुकिंग कन्फर्म 🎉',
     book_button: 'बुक करें',
@@ -1705,6 +1885,7 @@ const state = {
   // Agentic AI booking
   suggestedDoctors: null, // doctors suggested by AI
   consultationReason: null, // reason for consultation from AI
+  activeConsultation: null,  // { id, room_name, appointment_id } when in/entering video call
 };
 
 // Language-specific mock names
@@ -2189,6 +2370,14 @@ function go(screen) {
     renderPatientDashboard();
   }
 
+  // Start Jitsi when entering video screen with an active consultation
+  if (screen === 'video' && state.activeConsultation) {
+    setTimeout(initJitsi, 150);
+  }
+  if (screen !== 'video') {
+    destroyJitsi();
+  }
+
   setTimeout(() => prev.classList.remove('leaving'), 220);
   window.scrollTo({ top: 0, behavior: 'instant' });
 }
@@ -2387,16 +2576,16 @@ async function renderPatientDashboard() {
     
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+    const todayIso = today.toISOString().slice(0, 10);
+
     const upcomingAppointments = appointments.filter((a) => {
       if (a.statusRaw !== 'scheduled') return false;
-      if (a.dateRaw) {
-        const aptDate = new Date(a.dateRaw);
-        aptDate.setHours(0, 0, 0, 0);
-        return aptDate.getTime() >= today.getTime();
-      }
-      if (a.date === 'Today') return true;
-      return true;
+      if (!a.dateRaw) return false;
+      const aptDate = new Date(a.dateRaw);
+      aptDate.setHours(0, 0, 0, 0);
+      if (aptDate.getTime() < today.getTime()) return false; // past date
+      if (aptDate.getTime() > today.getTime()) return true;  // future date
+      return isAppointmentInFuture(a.dateRaw, a.timeRaw);   // today: only if time is in future
     });
     
     if (upcomingAppointments.length === 0) {
@@ -2406,6 +2595,7 @@ async function renderPatientDashboard() {
         </div>
       `;
     } else {
+      const i18n = I18N[state.language] || I18N.en;
       upcomingAppointments.forEach((a) => {
         const div = document.createElement('div');
         div.className = 'card';
@@ -2424,10 +2614,19 @@ async function renderPatientDashboard() {
           }
         }
 
+        const showJoin = canJoinConsultation(a);
+
         div.innerHTML = `
           <div class="apptTitle">${translateName(a.doctorName)}</div>
           <div class="apptMeta">${translateSpecialty(a.specialty)} • ${a.date} • ${a.time}</div>
           <div class="apptStatus">${a.status}</div>
+          ${
+            showJoin
+              ? `<div class="apptActions"><button class="btn primary btnSmall" type="button" data-action="join">${i18n.join_call}</button></div>`
+              : !canModify && a.dateRaw && a.timeRaw
+                ? `<div class="apptSub" style="font-size:12px;color:#6b7280;margin-top:4px;">${i18n.join_available_soon}</div>`
+                : ''
+          }
           ${
             canModify
               ? `<div class="apptActions">
@@ -2438,15 +2637,26 @@ async function renderPatientDashboard() {
           }
         `;
 
+        if (showJoin) {
+          const joinBtn = div.querySelector('button[data-action="join"]');
+          if (joinBtn) {
+            joinBtn.addEventListener('click', async () => {
+              const c = await createOrGetConsultation(a.id);
+              if (!c) {
+                toast('Could not start call');
+                return;
+              }
+              state.activeConsultation = c;
+              go('video');
+            });
+          }
+        }
+
         if (canModify) {
           const cancelBtn = div.querySelector('button[data-action="cancel"]');
           const rescheduleBtn = div.querySelector('button[data-action="reschedule"]');
-          if (cancelBtn) {
-            cancelBtn.addEventListener('click', () => cancelAppointment(a.id));
-          }
-          if (rescheduleBtn) {
-            rescheduleBtn.addEventListener('click', () => openReschedule(a));
-          }
+          if (cancelBtn) cancelBtn.addEventListener('click', () => cancelAppointment(a.id));
+          if (rescheduleBtn) rescheduleBtn.addEventListener('click', () => openReschedule(a));
         }
 
         upcoming.appendChild(div);
@@ -2673,6 +2883,17 @@ async function handleConsultDoctorAction(doctors, reason) {
 
 // ---------- ADVANCED BOOKING HELPERS ----------
 
+// True if appointment date+time is after now (used for Upcoming / future-only lists)
+function isAppointmentInFuture(dateStr, timeStr) {
+  if (!dateStr || !timeStr) return false;
+  const t = String(timeStr).trim();
+  const parts = t.split(':').map((n) => parseInt(n, 10));
+  const h = isNaN(parts[0]) ? 0 : parts[0];
+  const m = isNaN(parts[1]) ? 0 : parts[1];
+  const at = new Date(dateStr + 'T' + String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0') + ':00');
+  return at > new Date();
+}
+
 // Generate 30-minute slots from 09:00 to 17:00 (local time)
 function generateBrisbaneSlotsForDate(dateStr) {
   const slots = [];
@@ -2722,16 +2943,17 @@ function openBookingScreen(doctor, existingAppointment) {
   state.bookingDoctor = doctor;
   state.bookingSlot = null;
 
-  // Default date: from next day / at least ~12 hours ahead
-  const now = new Date();
-  const minDate = new Date(now.getTime() + 12 * 60 * 60 * 1000);
-  minDate.setHours(0, 0, 0, 0);
-  const minIso = minDate.toISOString().slice(0, 10);
+  // Minimum date: today (no past dates)
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayIso = today.toISOString().slice(0, 10);
 
-  // Use existing appointment date if provided and not in the past; otherwise use minIso
-  let startDate = existingAppointment?.date || minIso;
-  if (existingAppointment?.date && existingAppointment.date < minIso) {
-    startDate = minIso;
+  // Use existing appointment date if rescheduling and date is not in the past; otherwise today
+  const existingDateRaw = existingAppointment?.dateRaw || existingAppointment?.date;
+  let startDate = todayIso;
+  if (existingDateRaw && String(existingDateRaw).length >= 10) {
+    const existingIso = String(existingDateRaw).slice(0, 10);
+    if (existingIso >= todayIso) startDate = existingIso;
   }
 
   state.bookingDate = startDate;
@@ -2755,7 +2977,7 @@ function openBookingScreen(doctor, existingAppointment) {
   if (metaEl) metaEl.textContent = clinicName + (cityName ? ' • ' + cityName : '');
   if (dateInput) {
     dateInput.value = state.bookingDate;
-    dateInput.min = minIso; // cannot pick dates earlier than ~next day
+    dateInput.min = todayIso; // cannot pick past dates
   }
 
   renderBookingSlots();
@@ -2775,16 +2997,20 @@ async function renderBookingSlots() {
     const bookedAppointments = await fetchDoctorDayAppointments(state.bookingDoctor.id, state.bookingDate);
     console.log('Booked appointments for doctor', state.bookingDoctor.id, 'on', state.bookingDate, ':', bookedAppointments);
     
-    // Normalize time format: strip seconds if present (e.g., "09:00:00" -> "09:00")
+    // Normalize time to HH:MM so it matches slot format (e.g. "09:00:00" -> "09:00", "9:00" -> "09:00")
+    function toSlotTime(t) {
+      const s = String(t || '').trim();
+      if (!s) return '';
+      const parts = s.split(':').map((n) => parseInt(n, 10));
+      const h = isNaN(parts[0]) ? 0 : parts[0];
+      const m = isNaN(parts[1]) ? 0 : parts[1];
+      return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+    }
     bookedSet = new Set(
       bookedAppointments
         .filter((a) => a.status !== 'cancelled')
-        .map((a) => {
-          const time = a.appointment_time || '';
-          // If time has seconds (HH:MM:SS), strip them to match slot format (HH:MM)
-          return time.includes(':') ? time.substring(0, 5) : time;
-        })
-        .filter((t) => t.length > 0), // Remove empty strings
+        .map((a) => toSlotTime(a.appointment_time))
+        .filter((t) => t.length > 0),
     );
     
     console.log('Normalized booked times:', Array.from(bookedSet));
@@ -2793,20 +3019,30 @@ async function renderBookingSlots() {
     bookedSet = new Set();
   }
 
+  const now = new Date();
+  const isToday = state.bookingDate === now.toISOString().slice(0, 10);
+  const minSlotTime = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes from now onwards
+
   allSlots.forEach((time) => {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'slotBtn';
     btn.textContent = time;
 
-    if (bookedSet.has(time)) {
+    const isPastSlot = isToday && (() => {
+      const [hh, mm] = time.split(':').map((n) => parseInt(n, 10));
+      const slotAt = new Date(now);
+      slotAt.setHours(hh, mm, 0, 0);
+      return slotAt < minSlotTime; // disable if slot is before 30 min from now
+    })();
+
+    if (bookedSet.has(time) || isPastSlot) {
       btn.classList.add('disabled');
       btn.disabled = true;
-      btn.title = 'This slot is already booked';
+      btn.title = isPastSlot ? (I18N[state.language] || I18N.en).slot_passed : (I18N[state.language] || I18N.en).slot_booked;
     } else {
       btn.addEventListener('click', () => {
         state.bookingSlot = time;
-        // Clear previous selection
         Array.from(container.querySelectorAll('.slotBtn')).forEach((b) => b.classList.remove('selected'));
         btn.classList.add('selected');
       });
@@ -2829,6 +3065,31 @@ async function confirmBooking() {
   }
   if (!supabaseClient) {
     toast('Database not connected');
+    return;
+  }
+
+  // Ensure appointment is at least 30 minutes from now
+  const [hh, mm] = state.bookingSlot.split(':').map((n) => parseInt(n, 10));
+  const appointmentAt = new Date(state.bookingDate + 'T' + String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0') + ':00');
+  const minAllowed = new Date(Date.now() + 30 * 60 * 1000);
+  if (appointmentAt < minAllowed) {
+    toast(i18n.booking_future_only);
+    return;
+  }
+
+  // Re-check slot is still available (avoid double-book if someone else took it)
+  const existingOnSlot = await fetchDoctorDayAppointments(state.bookingDoctor.id, state.bookingDate);
+  const slotNorm = String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+  const isBooked = existingOnSlot.some((a) => {
+    if (a.status === 'cancelled') return false;
+    const t = String(a.appointment_time || '').trim();
+    const parts = t.split(':').map((n) => parseInt(n, 10));
+    const existing = String(parts[0] ?? 0).padStart(2, '0') + ':' + String(parts[1] ?? 0).padStart(2, '0');
+    return existing === slotNorm;
+  });
+  if (isBooked) {
+    toast(i18n.slot_booked);
+    renderBookingSlots(); // refresh slots so user can pick another
     return;
   }
 
@@ -2973,22 +3234,22 @@ async function renderDoctorDashboard() {
     }
   }
   
-  // Update statistics
-  if (statToday) statToday.textContent = stats.todayAppointments;
+  // Update statistics (Today = future appointments today only, to match list below)
+  if (statToday) statToday.textContent = todaysPatients.length;
   if (statPending) statPending.textContent = stats.pendingFollowups;
   if (statRating) statRating.textContent = stats.rating.toFixed(1);
-  
+
   // Render patient list
   if (list) {
     list.innerHTML = '';
-    
+
     if (todaysPatients.length === 0) {
       list.innerHTML = '<div class="card center"><div class="cardSub">No patients scheduled for today</div></div>';
     } else {
+      const i18n = I18N[state.language] || I18N.en;
       todaysPatients.forEach((p) => {
         const div = document.createElement('div');
         div.className = 'card patientCard';
-        // Translate conditions - handle comma-separated or single
         let translatedConditions = p.conditions;
         if (p.conditions && p.conditions !== 'Consultation') {
           if (p.conditions.includes(',')) {
@@ -2999,14 +3260,30 @@ async function renderDoctorDashboard() {
         } else if (p.conditions === 'Consultation') {
           translatedConditions = translateCondition('Consultation');
         }
+        const showJoin = canJoinConsultation(p);
+        const timeDisplay = p.timeRaw ? new Date('2000-01-01T' + p.timeRaw).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
         div.innerHTML = `
           <div class="avatar">${p.name.charAt(0)}</div>
           <div style="flex:1">
             <div class="itemTitle">${translateName(p.name)}</div>
             <div class="patientMeta">${p.age ? p.age + ' • ' : ''}${p.city}</div>
             <div class="patientCond">${translatedConditions}</div>
+            ${timeDisplay ? `<div class="patientCond" style="font-size:12px;color:#6b7280;">${timeDisplay}</div>` : ''}
+            ${showJoin ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" data-action="join">${i18n.join_call}</button></div>` : ''}
+            ${!showJoin && p.dateRaw && p.timeRaw ? `<div class="apptSub" style="font-size:11px;color:#9ca3af;">${i18n.join_available_soon}</div>` : ''}
           </div>
         `;
+        if (showJoin && p.id) {
+          const joinBtn = div.querySelector('button[data-action="join"]');
+          if (joinBtn) {
+            joinBtn.addEventListener('click', async () => {
+              const c = await createOrGetConsultation(p.id);
+              if (!c) { toast('Could not start call'); return; }
+              state.activeConsultation = c;
+              go('video');
+            });
+          }
+        }
         list.appendChild(div);
       });
     }
@@ -3019,9 +3296,11 @@ async function renderDoctorDashboard() {
     if (upcomingAppointments.length === 0) {
       upcomingList.innerHTML = '<div class="card center"><div class="cardSub">No upcoming appointments</div></div>';
     } else {
+      const i18n = I18N[state.language] || I18N.en;
       upcomingAppointments.forEach((apt) => {
         const div = document.createElement('div');
         div.className = 'card patientCard';
+        const showJoin = canJoinConsultation(apt);
         div.innerHTML = `
           <div class="avatar">${apt.patientName.charAt(0)}</div>
           <div style="flex:1">
@@ -3029,9 +3308,22 @@ async function renderDoctorDashboard() {
             <div class="patientMeta">${apt.patientAge ? apt.patientAge + ' • ' : ''}${apt.patientCity}</div>
             <div class="patientCond">${apt.date} • ${apt.time}</div>
             <div class="patientCond" style="margin-top: 4px; font-size: 12px; color: #666;">${translateCondition(apt.reason)}</div>
+            ${showJoin ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" data-action="join">${i18n.join_call}</button></div>` : ''}
+            ${!showJoin && apt.dateRaw && apt.timeRaw ? `<div class="apptSub" style="font-size:11px;color:#9ca3af;">${i18n.join_available_soon}</div>` : ''}
           </div>
           <div class="apptStatus" style="margin-top: 8px;">${apt.status}</div>
         `;
+        if (showJoin && apt.id) {
+          const joinBtn = div.querySelector('button[data-action="join"]');
+          if (joinBtn) {
+            joinBtn.addEventListener('click', async () => {
+              const c = await createOrGetConsultation(apt.id);
+              if (!c) { toast('Could not start call'); return; }
+              state.activeConsultation = c;
+              go('video');
+            });
+          }
+        }
         upcomingList.appendChild(div);
       });
     }
@@ -3569,6 +3861,11 @@ function bind() {
   const videoEnd = el('videoEnd');
   if (videoEnd) {
     videoEnd.addEventListener('click', () => {
+      if (state.activeConsultation) {
+        destroyJitsi();
+        endConsultation(state.activeConsultation.id);
+        state.activeConsultation = null;
+      }
       if (state.role === 'doctor') go('doctor');
       else if (state.role === 'patient') go('patient');
       else go('language');
