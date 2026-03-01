@@ -379,21 +379,21 @@
           </div>
         </section>
 
-        <!-- VIDEO CALL PLACEHOLDER -->
+        <!-- VIDEO CALL (Jitsi) -->
         <section class="screen" id="screen-video" data-screen="video" aria-label="Video call">
           <div class="hero compact">
             <div class="kicker" data-i18n="kicker_call">Live consult</div>
             <h1 class="title" data-i18n="video_title">Video call in progress</h1>
             <p class="subtitle" data-i18n="video_subtitle">
-              This is a placeholder screen to represent a teleconsultation.
+              Secure video consultation. Join when both parties are ready.
             </p>
           </div>
 
-          <div class="card center">
-            <div class="cardTitle">Doctor on call</div>
-            <div class="cardSub">You can imagine a real video stream here.</div>
-            <div style="margin-top:18px;font-size:40px;">🎥</div>
-          </div>
+          <div id="jitsi-container" class="jitsi-container" aria-live="polite"></div>
+
+          <p class="video_disclaimer" data-i18n="video_disclaimer">
+            Not for emergencies. For diagnosis and treatment, see a healthcare provider in person. This session is not recorded.
+          </p>
 
           <button class="btn primary tall" id="videoEnd" data-i18n="video_end_call">
             End call
