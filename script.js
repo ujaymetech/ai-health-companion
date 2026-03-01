@@ -984,6 +984,8 @@ const I18N = {
     upcoming_sub: 'Stay on top of visits and bookings',
     completed_title: 'Completed care',
     completed_sub: 'Your past consultations',
+    cancelled_title: 'Cancelled appointments',
+    cancelled_sub: 'Appointments you or the system cancelled',
     recommended_title: 'Recommended doctors',
     recommended_sub: 'Nearby specialists for you',
     find_doctors: 'Find doctors',
