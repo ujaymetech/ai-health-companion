@@ -2,6 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
+    <script>
+      (function() {
+        if (window.location.hostname === 'ujaymetech.github.io' && window.location.pathname.indexOf('ai-health-companion') !== -1) {
+          var b = document.createElement('base');
+          b.href = 'https://ujaymetech.github.io/ai-health-companion/';
+          document.head.insertBefore(b, document.head.firstChild);
+        }
+      })();
+    </script>
     <title>AI Health Companion</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#10B981" />
