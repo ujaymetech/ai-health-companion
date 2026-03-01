@@ -3038,12 +3038,13 @@ async function renderBookingSlots() {
   const now = new Date();
   const minSlotTime = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes from now onwards
 
-  // Weekdays only: 0 = Sunday, 6 = Saturday
+  // Weekdays only for future dates; today is always allowed (e.g. today open till 10 PM even if Sunday)
   const selectedDate = new Date(state.bookingDate + 'T12:00:00');
   const dayOfWeek = selectedDate.getDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  const weekendNotAllowed = isWeekend && !isToday;
 
-  if (isWeekend) {
+  if (weekendNotAllowed) {
     const msg = document.createElement('p');
     msg.className = 'slotGridMessage';
     msg.textContent = (I18N[state.language] || I18N.en).weekdays_only_message || 'Choose a weekday to see available slots.';
