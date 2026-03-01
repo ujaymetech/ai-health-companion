@@ -2630,7 +2630,7 @@ async function renderPatientDashboard() {
           <div class="apptStatus">${a.status}</div>
           ${
             showJoin
-              ? `<div class="apptActions"><button class="btn primary btnSmall" type="button" data-action="join">${i18n.join_call}</button></div>`
+              ? `<div class="apptActions"><button class="btn primary btnSmall" type="button" data-action="join" data-appointment-id="${a.id || ''}">${i18n.join_call}</button></div>`
               : !canModify && a.dateRaw && a.timeRaw
                 ? `<div class="apptSub" style="font-size:12px;color:#6b7280;margin-top:4px;">${i18n.join_available_soon}</div>`
                 : ''
@@ -2644,21 +2644,6 @@ async function renderPatientDashboard() {
               : ''
           }
         `;
-
-        if (showJoin) {
-          const joinBtn = div.querySelector('button[data-action="join"]');
-          if (joinBtn) {
-            joinBtn.addEventListener('click', async () => {
-              const c = await createOrGetConsultation(a.id);
-              if (!c) {
-                toast('Could not start call');
-                return;
-              }
-              state.activeConsultation = c;
-              go('video');
-            });
-          }
-        }
 
         if (canModify) {
           const cancelBtn = div.querySelector('button[data-action="cancel"]');
@@ -3308,22 +3293,11 @@ async function renderDoctorDashboard() {
             <div class="patientMeta">${p.age ? p.age + ' • ' : ''}${p.city}</div>
             <div class="patientCond">${translatedConditions}</div>
             ${timeDisplay ? `<div class="patientCond" style="font-size:12px;color:#6b7280;">${timeDisplay}</div>` : ''}
-            ${showJoin ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" data-action="join">${i18n.join_call}</button></div>` : ''}
+            ${showJoin ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" data-action="join" data-appointment-id="${p.id || ''}">${i18n.join_call}</button></div>` : ''}
             ${showJoinDisabled ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" disabled title="${i18n.join_available_soon}">${i18n.join_call}</button></div>` : ''}
             ${!showJoin && !showJoinDisabled && p.dateRaw && p.timeRaw ? `<div class="apptSub" style="font-size:11px;color:#9ca3af;">${i18n.join_available_soon}</div>` : ''}
           </div>
         `;
-        if (showJoin && p.id) {
-          const joinBtn = div.querySelector('button[data-action="join"]');
-          if (joinBtn) {
-            joinBtn.addEventListener('click', async () => {
-              const c = await createOrGetConsultation(p.id);
-              if (!c) { toast('Could not start call'); return; }
-              state.activeConsultation = c;
-              go('video');
-            });
-          }
-        }
         list.appendChild(div);
       });
     }
@@ -3349,23 +3323,12 @@ async function renderDoctorDashboard() {
             <div class="patientMeta">${apt.patientAge ? apt.patientAge + ' • ' : ''}${apt.patientCity}</div>
             <div class="patientCond">${apt.date} • ${apt.time}</div>
             <div class="patientCond" style="margin-top: 4px; font-size: 12px; color: #666;">${translateCondition(apt.reason)}</div>
-            ${showJoin ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" data-action="join">${i18n.join_call}</button></div>` : ''}
+            ${showJoin ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" data-action="join" data-appointment-id="${apt.id || ''}">${i18n.join_call}</button></div>` : ''}
             ${showJoinDisabled ? `<div class="apptActions" style="margin-top:8px;"><button class="btn primary btnSmall" type="button" disabled title="${i18n.join_available_soon}">${i18n.join_call}</button></div>` : ''}
             ${!showJoin && !showJoinDisabled && apt.dateRaw && apt.timeRaw ? `<div class="apptSub" style="font-size:11px;color:#9ca3af;">${i18n.join_available_soon}</div>` : ''}
           </div>
           <div class="apptStatus" style="margin-top: 8px;">${apt.status}</div>
         `;
-        if (showJoin && apt.id) {
-          const joinBtn = div.querySelector('button[data-action="join"]');
-          if (joinBtn) {
-            joinBtn.addEventListener('click', async () => {
-              const c = await createOrGetConsultation(apt.id);
-              if (!c) { toast('Could not start call'); return; }
-              state.activeConsultation = c;
-              go('video');
-            });
-          }
-        }
         upcomingList.appendChild(div);
       });
     }
@@ -3913,6 +3876,22 @@ function bind() {
       else go('language');
     });
   }
+
+  // Delegated handler for Join call buttons (patient and doctor dashboards)
+  document.body.addEventListener('click', async (e) => {
+    const btn = e.target && e.target.closest && e.target.closest('button[data-action="join"]');
+    if (!btn || btn.disabled) return;
+    const appointmentId = btn.getAttribute('data-appointment-id');
+    if (!appointmentId) return;
+    e.preventDefault();
+    const c = await createOrGetConsultation(appointmentId);
+    if (!c) {
+      toast('Could not start call');
+      return;
+    }
+    state.activeConsultation = c;
+    go('video');
+  });
 
   // Advanced booking screen buttons
   const bookBack = el('bookBack');
