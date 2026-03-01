@@ -160,8 +160,8 @@ async function fetchDoctorStats(doctorUserId) {
   }
   
   try {
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-    
+    const today = getLocalDateString();
+
     // Today's appointments
     const { count: todayCount } = await supabaseClient
       .from('appointments')
@@ -206,8 +206,8 @@ async function fetchTodaysPatients(doctorUserId) {
   }
   
   try {
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
-    
+    const today = getLocalDateString();
+
     // First, get today's appointments
     const { data: appointments, error: aptError } = await supabaseClient
       .from('appointments')
@@ -271,11 +271,11 @@ async function fetchDoctorUpcomingAppointments(doctorUserId) {
   }
   
   try {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getLocalDateString();
     const nextWeek = new Date();
-    nextWeek.setDate(nextWeek.getDate() + 14); // Next 14 days
-    const nextWeekStr = nextWeek.toISOString().split('T')[0];
-    
+    nextWeek.setDate(nextWeek.getDate() + 14);
+    const nextWeekStr = getLocalDateString(nextWeek);
+
     // Fetch upcoming appointments
     const { data: appointments, error: aptError } = await supabaseClient
       .from('appointments')
@@ -2574,18 +2574,18 @@ async function renderPatientDashboard() {
   if (upcoming) {
     upcoming.innerHTML = '';
     
+    const todayIso = getLocalDateString();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const todayIso = today.toISOString().slice(0, 10);
+    const todayStart = new Date(todayIso + 'T00:00:00');
 
     const upcomingAppointments = appointments.filter((a) => {
       if (a.statusRaw !== 'scheduled') return false;
       if (!a.dateRaw) return false;
-      const aptDate = new Date(a.dateRaw);
-      aptDate.setHours(0, 0, 0, 0);
-      if (aptDate.getTime() < today.getTime()) return false; // past date
-      if (aptDate.getTime() > today.getTime()) return true;  // future date
-      return isAppointmentInFuture(a.dateRaw, a.timeRaw);   // today: only if time is in future
+      const aptDate = new Date(a.dateRaw + 'T00:00:00');
+      if (aptDate.getTime() < todayStart.getTime()) return false; // past date
+      if (aptDate.getTime() > todayStart.getTime()) return true;   // future date
+      return isAppointmentInFuture(a.dateRaw, a.timeRaw);         // today: only if time is in future
     });
     
     if (upcomingAppointments.length === 0) {
@@ -2883,6 +2883,12 @@ async function handleConsultDoctorAction(doctors, reason) {
 
 // ---------- ADVANCED BOOKING HELPERS ----------
 
+// Current date in user's local timezone as YYYY-MM-DD (no UTC shift)
+function getLocalDateString(dateOrUndefined) {
+  const d = dateOrUndefined ? new Date(dateOrUndefined) : new Date();
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
 // True if appointment date+time is after now (used for Upcoming / future-only lists)
 function isAppointmentInFuture(dateStr, timeStr) {
   if (!dateStr || !timeStr) return false;
@@ -2943,10 +2949,8 @@ function openBookingScreen(doctor, existingAppointment) {
   state.bookingDoctor = doctor;
   state.bookingSlot = null;
 
-  // Minimum date: today (no past dates)
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const todayIso = today.toISOString().slice(0, 10);
+  // Minimum date: today in user's local timezone (no past dates)
+  const todayIso = getLocalDateString();
 
   // Use existing appointment date if rescheduling and date is not in the past; otherwise today
   const existingDateRaw = existingAppointment?.dateRaw || existingAppointment?.date;
@@ -3020,7 +3024,7 @@ async function renderBookingSlots() {
   }
 
   const now = new Date();
-  const isToday = state.bookingDate === now.toISOString().slice(0, 10);
+  const isToday = state.bookingDate === getLocalDateString();
   const minSlotTime = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes from now onwards
 
   allSlots.forEach((time) => {
