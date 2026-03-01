@@ -477,6 +477,60 @@ body {
   text-align: center;
 }
 
+/* Advanced booking slots */
+.slotGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 12px 0 4px;
+}
+.slotBtn {
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  min-height: 40px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 800;
+  color: #111827;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.06);
+}
+.slotBtn:hover {
+  background: #f9fafb;
+}
+.slotBtn:active {
+  transform: translateY(1px);
+  box-shadow: 0 3px 8px rgba(15, 23, 42, 0.08);
+}
+.slotBtn.selected {
+  border-color: var(--primary);
+  background: #ecfdf5;
+  color: #047857;
+  box-shadow: 0 8px 18px rgba(16, 185, 129, 0.3);
+}
+.slotBtn.disabled {
+  background: #f3f4f6;
+  color: #9ca3af;
+  border-style: dashed;
+  cursor: default;
+  box-shadow: none;
+}
+
+.apptActions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+}
+.apptActions .btnSmall,
+.apptActions .btn {
+  flex: 1;
+}
+
 .chatWrap {
   border-radius: var(--radius2);
   border: 1px solid var(--border);
@@ -928,4 +982,22 @@ body {
   .statValue {
     font-size: 24px;
   }
+}
+
+/* Video call (Jitsi) */
+.jitsi-container {
+  width: 100%;
+  min-height: 280px;
+  height: 50vh;
+  max-height: 400px;
+  background: #1a1a2e;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 12px 0;
+}
+.video_disclaimer {
+  font-size: 11px;
+  color: #6b7280;
+  margin: 8px 0 16px;
+  line-height: 1.4;
 }
