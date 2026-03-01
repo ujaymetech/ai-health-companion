@@ -1064,6 +1064,7 @@ const I18N = {
     booking_date_sub: 'Weekdays only (Mon–Fri)',
     booking_slots_label: 'Available time slots',
     booking_slots_sub: 'Times between 09:00–17:00',
+    booking_slots_sub_today: 'Today: 09:00–22:00 (open till 10 PM)',
     booking_back: 'Back',
     booking_confirm: 'Confirm',
     booking_future_only: 'Please choose a slot at least 30 minutes from now',
@@ -2904,10 +2905,11 @@ function isAppointmentInFuture(dateStr, timeStr) {
   return at > new Date();
 }
 
-// Generate 30-minute slots from 09:00 to 17:00 (local time)
-function generateBrisbaneSlotsForDate(dateStr) {
+// Generate 30-minute slots (local time). Default 09:00–17:00; use endHour 22 for today (open till 10 PM).
+function generateBrisbaneSlotsForDate(dateStr, endHour) {
+  const end = endHour != null ? endHour : 17;
   const slots = [];
-  for (let h = 9; h < 17; h++) {
+  for (let h = 9; h < end; h++) {
     for (let m = 0; m < 60; m += 30) {
       const hh = String(h).padStart(2, '0');
       const mm = String(m).padStart(2, '0');
@@ -2997,7 +2999,13 @@ async function renderBookingSlots() {
   if (!container || !state.bookingDoctor || !state.bookingDate) return;
   container.innerHTML = '';
 
-  const allSlots = generateBrisbaneSlotsForDate(state.bookingDate);
+  // Today (local): slots open till 10 PM (22:00). Other days: till 5 PM (17:00).
+  const isToday = state.bookingDate === getLocalDateString();
+  const allSlots = generateBrisbaneSlotsForDate(state.bookingDate, isToday ? 22 : 17);
+
+  const i18n = I18N[state.language] || I18N.en;
+  const slotsSub = document.querySelector('[data-i18n="booking_slots_sub"]');
+  if (slotsSub) slotsSub.textContent = isToday ? (i18n.booking_slots_sub_today || 'Today: 09:00–22:00') : i18n.booking_slots_sub;
 
   // Load booked slots for this doctor and date
   let bookedSet = new Set();
@@ -3028,7 +3036,6 @@ async function renderBookingSlots() {
   }
 
   const now = new Date();
-  const isToday = state.bookingDate === getLocalDateString();
   const minSlotTime = new Date(now.getTime() + 30 * 60 * 1000); // 30 minutes from now onwards
 
   // Weekdays only: 0 = Sunday, 6 = Saturday
@@ -3040,8 +3047,9 @@ async function renderBookingSlots() {
     const msg = document.createElement('p');
     msg.className = 'slotGridMessage';
     msg.textContent = (I18N[state.language] || I18N.en).weekdays_only_message || 'Choose a weekday to see available slots.';
-    msg.style.cssText = 'grid-column:1/-1; font-size:13px; color:#6b7280; margin:0 0 8px 0;';
+    msg.style.cssText = 'font-size:14px; color:#6b7280; margin:12px 0; padding:12px; background:#f3f4f6; border-radius:8px;';
     container.appendChild(msg);
+    return;
   }
 
   allSlots.forEach((time) => {
@@ -3050,7 +3058,7 @@ async function renderBookingSlots() {
     btn.className = 'slotBtn';
     btn.textContent = time;
 
-    const isPastSlot = !isWeekend && isToday && (() => {
+    const isPastSlot = isToday && (() => {
       const [hh, mm] = time.split(':').map((n) => parseInt(n, 10));
       const slotAt = new Date(now);
       slotAt.setHours(hh, mm, 0, 0);
@@ -3058,10 +3066,9 @@ async function renderBookingSlots() {
     })();
 
     const isBooked = bookedSet.has(time);
-    const disabled = isWeekend || isBooked || isPastSlot;
+    const disabled = isBooked || isPastSlot;
     let titleMsg = (I18N[state.language] || I18N.en).slot_booked;
-    if (isWeekend) titleMsg = (I18N[state.language] || I18N.en).weekdays_only_slot || 'Weekdays only (Mon–Fri)';
-    else if (isPastSlot) titleMsg = (I18N[state.language] || I18N.en).slot_passed;
+    if (isPastSlot) titleMsg = (I18N[state.language] || I18N.en).slot_passed;
 
     if (disabled) {
       btn.classList.add('disabled');
