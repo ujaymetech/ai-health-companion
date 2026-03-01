@@ -538,11 +538,11 @@ async function fetchPatientAppointments(patientUserId) {
 }
 
 // --- Consultation (Jitsi) helpers ---
-const JOIN_WINDOW_START_MINS = 10;  // Join button appears 10 minutes before
+const JOIN_WINDOW_START_MINS = 30;  // Join button appears 30 minutes before (doctor and patient)
 const JOIN_WINDOW_END_MINS = 60;    // Join allowed until 60 minutes after start
 
 /**
- * Returns true only when current time is within join window: from 10 min before to 60 min after appointment time.
+ * Returns true only when current time is within join window: from 30 min before to 60 min after appointment time.
  * @param appointment - { dateRaw, timeRaw } (e.g. dateRaw: '2026-01-26', timeRaw: '14:00' or '14:00:00')
  */
 function canJoinConsultation(appointment) {
@@ -1053,7 +1053,7 @@ const I18N = {
     video_end_call: 'End call',
     video_disclaimer: 'Not for emergencies. For diagnosis and treatment, see a healthcare provider in person. This session is not recorded.',
     join_call: 'Join call',
-    join_available_soon: 'Join available 10 min before',
+    join_available_soon: 'Join available 30 min before',
     // Booking
     booking_title: 'Choose a time',
     booking_confirmed: 'Booking confirmed 🎉',
@@ -1178,7 +1178,7 @@ const I18N = {
     video_end_call: 'कॉल समाप्त करें',
     video_disclaimer: 'इमरजेंसी के लिए नहीं। निदान के लिए डॉक्टर से मिलें। यह सत्र रिकॉर्ड नहीं होता।',
     join_call: 'कॉल में जॉइन करें',
-    join_available_soon: 'अपॉइंटमेंट से 10 मिनट पहले जॉइन कर सकते हैं',
+    join_available_soon: 'अपॉइंटमेंट से 30 मिनट पहले जॉइन कर सकते हैं',
     // Booking
     booking_confirmed: 'बुकिंग कन्फर्म 🎉',
     book_button: 'बुक करें',
